@@ -9,11 +9,13 @@ TOKEN_ID = "5649686016:AAHTvRL-kmPedN02gXVICHeYD2G_F1AHgus"
 CHANNEL_ID = 1755272924
 WIDTH = 256
 HEIGHT = 256
+THRESHOLD = 45
 
-video = cv2.VideoCapture(0)
+stop = False
+video = cv2.VideoCapture(1)
 client = socketio.Client()
 bot = telegram.Bot(TOKEN_ID)
-ser = serial.Serial()
+ser = serial.Serial("COM7")
 
 def get_time():
   _time = datetime.datetime.now()
@@ -26,14 +28,40 @@ def send(noise):
   filename = "noise.png"
   cv2.imwrite(filename, frame)
 
-  caption = "Vào lúc {}, thiết bị phát hiện có tiếng ồn với ngưỡng ước tính là {}%".format(get_time(), noise)
+  caption = "Vào lúc {}, thiết bị phát hiện có tiếng ồn với ngưỡng ước tính là {:.2f}%".format(get_time(), noise)
   bot.send_photo(CHANNEL_ID, photo=open(filename, "rb"), caption=caption)
 
 def esp32():
-  while True:
+  global stop
+  while not stop:
     analog_value = ser.readline().decode("utf-8") \
       .replace('\n', '')
-    print(analog_value)
+    analog_value = float(analog_value)
+    analog_value = analog_value / 1023 * 100
+    print ("Ngưỡng độ ồn là {:.2f}%".format(analog_value))
+    data = {
+      "time" : get_time(),
+      "noise_value" : analog_value * 1023 / 100
+    }
+    if client.connected:
+      client.emit("noise_value", data=data, namespace="/")
+    if analog_value > THRESHOLD:
+      send(analog_value)
 
-threading.Thread(name="Service for testing", target=esp32).start()
-# client.connect("noise-detector.herokuapp.com", namespaces=["/"])
+mem = False
+def socket():
+  client.connect("http://localhost:4000", namespaces=["/"])
+
+threading.Thread(name="Service for esp32", target=esp32).start()
+threading.Thread(name="Service for client", target=socket).start()
+
+try:
+  while True:
+    if not mem and client.connected:
+      mem = True
+      client.emit("threshold", THRESHOLD, namespace="/")
+    if client.connected == False:
+      mem = False
+
+except KeyboardInterrupt:
+  stop = True
